@@ -82,3 +82,10 @@ export interface ToolDefinition {
   requires_integration?: string;
   parameters_schema: Record<string, unknown>;
 }
+
+/** Returned by the agent when a tool stops the graph for UI confirmation. */
+export interface PendingToolConfirmation {
+  toolCallId: string;
+  toolName: string;
+  message: string;
+}

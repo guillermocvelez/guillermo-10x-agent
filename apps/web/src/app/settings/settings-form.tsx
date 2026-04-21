@@ -9,17 +9,30 @@ interface Props {
   profile: Record<string, unknown> | null;
   toolSettings: Array<{ tool_id: string; enabled: boolean }>;
   telegramLinked: boolean;
+  githubConnected: boolean;
+  githubQuery?: { connected?: boolean; error?: string };
 }
 
 const TOOL_IDS = [
   "get_user_preferences",
   "list_enabled_tools",
+  "session_context",
+  "save_secure_note",
+  "list_secure_notes",
   "github_list_repos",
   "github_list_issues",
   "github_create_issue",
+  "github_create_repo",
 ];
 
-export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: Props) {
+export function SettingsForm({
+  userId,
+  profile,
+  toolSettings,
+  telegramLinked,
+  githubConnected,
+  githubQuery,
+}: Props) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -33,6 +46,7 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: 
     toolSettings.filter((t) => t.enabled).map((t) => t.tool_id)
   );
   const [linkCode, setLinkCode] = useState<string | null>(null);
+  const [githubDisconnecting, setGithubDisconnecting] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -71,6 +85,19 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: 
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
     router.refresh();
+  }
+
+  async function disconnectGithub() {
+    setGithubDisconnecting(true);
+    try {
+      const res = await fetch("/api/integrations/github/disconnect", {
+        method: "POST",
+      });
+      if (!res.ok) throw new Error("disconnect failed");
+      router.refresh();
+    } finally {
+      setGithubDisconnecting(false);
+    }
   }
 
   async function generateTelegramCode() {
@@ -123,6 +150,60 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: 
           />
           <p className="text-xs text-neutral-400 text-right mt-1">{systemPrompt.length}/500</p>
         </div>
+      </section>
+
+      {/* GitHub */}
+      <section className="space-y-4">
+        <h2 className="text-base font-semibold">GitHub</h2>
+        {githubQuery?.connected && (
+          <p className="text-sm text-green-600">GitHub conectado correctamente.</p>
+        )}
+        {githubQuery?.error && (
+          <p className="text-sm text-red-600">
+            {githubQuery.error === "state" &&
+              "La verificación de seguridad falló. Intenta conectar de nuevo."}
+            {githubQuery.error === "token" &&
+              "GitHub no devolvió un token válido. Revisa el Client ID/Secret y el callback URL."}
+            {githubQuery.error === "config" &&
+              "Falta configuración del servidor (variables de entorno de GitHub o cifrado)."}
+            {githubQuery.error === "crypto" &&
+              "No se pudo cifrar el token. Revisa OAUTH_ENCRYPTION_KEY (64 caracteres hex)."}
+            {githubQuery.error === "db" && "No se pudo guardar la integración en la base de datos."}
+            {!["state", "token", "config", "crypto", "db"].includes(githubQuery.error) &&
+              "Error al conectar con GitHub."}
+          </p>
+        )}
+        {githubConnected ? (
+          <div className="space-y-2">
+            <p className="text-sm text-green-600">Cuenta de GitHub conectada.</p>
+            <p className="text-xs text-neutral-500">
+              El agente puede usar tus repositorios e issues con los permisos que aprobaste. Para
+              revocar del todo el acceso también puedes quitar la app en GitHub → Settings →
+              Applications.
+            </p>
+            <button
+              type="button"
+              onClick={disconnectGithub}
+              disabled={githubDisconnecting}
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:hover:bg-neutral-900"
+            >
+              {githubDisconnecting ? "Desconectando..." : "Desconectar GitHub"}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-neutral-500">
+              Conecta tu cuenta para que el agente liste repos, issues y cree recursos con tus
+              permisos.
+            </p>
+            <a
+              href="/api/integrations/github"
+              className="inline-flex rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
+            >
+              Conectar GitHub
+            </a>
+          </div>
+        )}
       </section>
 
       {/* Tools */}

@@ -16,6 +16,37 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     parameters_schema: { type: "object", properties: {}, required: [] },
   },
   {
+    id: "session_context",
+    name: "session_context",
+    description:
+      "Devuelve el alcance actual de sesión y usuario desde el contexto de runtime (no uses argumentos para suplantar identidades). Útil para depuración y para enseñar el patrón config + cierre.",
+    risk: "low",
+    parameters_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    id: "save_secure_note",
+    name: "save_secure_note",
+    description:
+      "Guarda una nota privada asociada al usuario autenticado (título opcional y contenido). Requiere confirmación en la app o Telegram antes de persistir. Úsala solo cuando el usuario pida explícitamente guardar texto como nota; el userId lo inyecta el sistema, no el modelo.",
+    risk: "medium",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Título opcional" },
+        content: { type: "string", description: "Texto de la nota" },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    id: "list_secure_notes",
+    name: "list_secure_notes",
+    description:
+      "Lista las notas privadas guardadas del usuario (solo lectura). Invócala únicamente cuando el mensaje actual sea una petición clara de ver, mostrar, listar o consultar sus notas guardadas y mencione notas (p. ej. «¿puedo ver las notas guardadas?»). No la uses para guardar notas, ni si el usuario no habla de notas, ni por iniciativa sin esa intención.",
+    risk: "low",
+    parameters_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
     id: "github_list_repos",
     name: "github_list_repos",
     description: "Lists the user's GitHub repositories.",
@@ -60,6 +91,23 @@ export const TOOL_CATALOG: ToolDefinition[] = [
         body: { type: "string" },
       },
       required: ["owner", "repo", "title"],
+    },
+  },
+  {
+    id: "github_create_repo",
+    name: "github_create_repo",
+    description:
+      "Creates a new GitHub repository via API when the user asks to create a repo; do not substitute with only manual website steps. Requires confirmation in the app.",
+    risk: "medium",
+    requires_integration: "github",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Repository name" },
+        description: { type: "string", description: "Short description" },
+        private: { type: "boolean", description: "Whether the repo is private" },
+      },
+      required: ["name"],
     },
   },
 ];

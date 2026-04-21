@@ -31,3 +31,16 @@ export async function getSessionMessages(
   if (error) throw error;
   return (data ?? []) as AgentMessage[];
 }
+
+/** Último mensaje con role `user` en la sesión (más reciente). */
+export async function getLastUserMessageContent(
+  db: DbClient,
+  sessionId: string,
+  lookback = 120
+): Promise<string | null> {
+  const rows = await getSessionMessages(db, sessionId, lookback);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].role === "user") return rows[i].content;
+  }
+  return null;
+}

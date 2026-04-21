@@ -20,6 +20,18 @@ function publicOriginForWebhook(request: Request): string {
   return new URL(request.url).origin;
 }
 
+function isUnsuitableWebhookOrigin(origin: string): boolean {
+  try {
+    const u = new URL(origin);
+    const host = u.hostname.toLowerCase();
+    if (u.protocol !== "https:") return true;
+    if (host === "localhost" || host === "127.0.0.1" || host === "::1") return true;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export async function GET(request: Request) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -30,6 +42,17 @@ export async function GET(request: Request) {
 
   const origin = publicOriginForWebhook(request);
   const webhookUrl = `${origin}/api/telegram/webhook`;
+
+  if (!process.env.TELEGRAM_WEBHOOK_BASE_URL?.trim() && isUnsuitableWebhookOrigin(origin)) {
+    return NextResponse.json(
+      {
+        error:
+          "Telegram solo acepta webhooks HTTPS públicos (no localhost). Define TELEGRAM_WEBHOOK_BASE_URL en apps/web/.env.local con la URL base HTTPS de tu túnel (p. ej. https://abc.ngrok-free.app), reinicia `npm run dev` y vuelve a abrir esta ruta; o abre esta misma URL desde el navegador usando el dominio del túnel.",
+        attemptedWebhookUrl: webhookUrl,
+      },
+      { status: 400 }
+    );
+  }
 
   const res = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
     method: "POST",

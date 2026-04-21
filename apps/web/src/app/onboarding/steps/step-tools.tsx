@@ -23,6 +23,30 @@ const AVAILABLE_TOOLS = [
     requiresIntegration: null,
   },
   {
+    id: "session_context",
+    name: "Contexto de sesión",
+    description:
+      "Expone el alcance usuario/sesión del runtime (útil para depuración y el patrón config).",
+    risk: "low" as const,
+    requiresIntegration: null,
+  },
+  {
+    id: "save_secure_note",
+    name: "Guardar nota privada",
+    description:
+      "Guarda texto como nota en tu cuenta; pide confirmación antes de guardar.",
+    risk: "medium" as const,
+    requiresIntegration: null,
+  },
+  {
+    id: "list_secure_notes",
+    name: "Ver notas guardadas",
+    description:
+      "Lista tus notas privadas cuando preguntas por verlas o consultarlas.",
+    risk: "low" as const,
+    requiresIntegration: null,
+  },
+  {
     id: "github_list_repos",
     name: "GitHub: listar repos",
     description: "Lista tus repositorios de GitHub.",
@@ -40,6 +64,13 @@ const AVAILABLE_TOOLS = [
     id: "github_create_issue",
     name: "GitHub: crear issue",
     description: "Crea un issue nuevo (requiere confirmación).",
+    risk: "medium" as const,
+    requiresIntegration: "github",
+  },
+  {
+    id: "github_create_repo",
+    name: "GitHub: crear repositorio",
+    description: "Crea un repositorio nuevo (requiere confirmación).",
     risk: "medium" as const,
     requiresIntegration: "github",
   },

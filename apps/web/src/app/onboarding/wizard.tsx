@@ -68,9 +68,13 @@ export function OnboardingWizard({ userId, initialProfile, initialToolSettings }
     const TOOL_IDS = [
       "get_user_preferences",
       "list_enabled_tools",
+      "session_context",
+      "save_secure_note",
+      "list_secure_notes",
       "github_list_repos",
       "github_list_issues",
       "github_create_issue",
+      "github_create_repo",
     ];
 
     for (const toolId of TOOL_IDS) {

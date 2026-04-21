@@ -57,6 +57,8 @@ Si algo falla (por ejemplo, el trigger `on_auth_user_created` en un proyecto ya 
 
 Así el flujo de login/signup y el intercambio de código en `/auth/callback` funcionan en local.
 
+   La **callback de GitHub OAuth** (`/api/integrations/github/callback`) se configura en la [OAuth App de GitHub](docs/github-integration.md), no en esta lista de Supabase.
+
 ---
 
 ## Paso 5 — Variables de entorno
@@ -66,7 +68,7 @@ Next.js carga `.env*` desde el directorio de la app **`apps/web`**, no desde la 
 1. Copia el ejemplo:
 
    ```bash
-   cp .env.example apps/web/.env.local
+   cp apps/web/.env.example apps/web/.env.local
    ```
 
    *(Si ya tienes `.env.local` en la raíz, mueve o copia ese archivo a `apps/web/.env.local`.)*
@@ -81,9 +83,12 @@ Next.js carga `.env*` desde el directorio de la app **`apps/web`**, no desde la 
    | `OPENROUTER_API_KEY` | Clave de OpenRouter |
    | `TELEGRAM_BOT_TOKEN` | *(Opcional)* Token del bot |
    | `TELEGRAM_WEBHOOK_SECRET` | *(Opcional)* Secreto que Telegram enviará en cabecera; debe coincidir con el configurado al registrar el webhook |
-   | `OAUTH_ENCRYPTION_KEY` | Reservado para cifrado de tokens OAuth en el futuro; puedes dejar un placeholder hasta integrar proveedores |
+   | `NEXT_PUBLIC_APP_URL` | *(Opcional)* Origen público de la app (p. ej. `https://tu-dominio.com`); útil para OAuth en producción |
+   | `GITHUB_CLIENT_ID` | OAuth App de GitHub — ver [docs/github-integration.md](docs/github-integration.md) |
+   | `GITHUB_CLIENT_SECRET` | Secreto de la OAuth App (solo servidor) |
+   | `OAUTH_ENCRYPTION_KEY` | 64 caracteres hex (32 bytes) para cifrar tokens OAuth guardados en BD |
 
-Referencia de nombres: [.env.example](.env.example).
+Plantilla: [apps/web/.env.example](apps/web/.env.example). Integración GitHub paso a paso: [docs/github-integration.md](docs/github-integration.md).
 
 ---
 
@@ -131,7 +136,7 @@ Telegram **exige HTTPS** para webhooks. En local:
 
 4. Con la app en marcha, visita en el navegador (sustituye la URL base):
 
-   `https://TU_URL_NGROK/api/telegram/setup`
+   `https://0cf6-2803-9810-6890-b608-2f28-7730-328-4b9d.ngrok-free.app/api/telegram/setup`
 
    Eso llama a `setWebhook` de Telegram apuntando a `/api/telegram/webhook` y, si definiste secreto, lo asocia al webhook.
 
@@ -158,6 +163,7 @@ Después de vincular, los mensajes al bot usan el mismo pipeline que el chat web
 - [docs/brief.md](docs/brief.md) — visión y brief original.
 - [docs/architecture.md](docs/architecture.md) — arquitectura técnica del MVP.
 - [docs/plan.md](docs/plan.md) — fases y decisiones de implementación.
+- [docs/github-integration.md](docs/github-integration.md) — OAuth App de GitHub, variables de entorno y cifrado de tokens.
 
 ---
 

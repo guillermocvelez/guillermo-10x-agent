@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@agents/db";
+import { createServerClient, decryptOAuthToken, getToolCallWithSessionUser } from "@agents/db";
 import { runAgent } from "@agents/agent";
+import {
+  approvePendingToolCall,
+  rejectPendingToolCall,
+} from "@/lib/pending-tool-actions";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";
@@ -61,35 +65,98 @@ async function answerCallbackQuery(callbackQueryId: string, text: string) {
 }
 
 export async function POST(request: Request) {
+  if (!BOT_TOKEN) {
+    console.error("[telegram/webhook] TELEGRAM_BOT_TOKEN is not set");
+    return NextResponse.json({ error: "Bot not configured" }, { status: 503 });
+  }
+
   const secret = request.headers.get("x-telegram-bot-api-secret-token");
   if (WEBHOOK_SECRET && secret !== WEBHOOK_SECRET) {
+    console.error(
+      "[telegram/webhook] Secret mismatch: set TELEGRAM_WEBHOOK_SECRET in .env and re-run /api/telegram/setup so Telegram sends the same token in x-telegram-bot-api-secret-token"
+    );
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const update: TelegramUpdate = await request.json();
-  const db = createServerClient();
+  let update: TelegramUpdate;
+  try {
+    update = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  let db: ReturnType<typeof createServerClient>;
+  try {
+    db = createServerClient();
+  } catch (e) {
+    console.error("[telegram/webhook] Supabase server client:", e);
+    return NextResponse.json({ error: "Server misconfigured" }, { status: 503 });
+  }
 
   // Handle callback queries (confirmation buttons)
   if (update.callback_query) {
     const cb = update.callback_query;
-    const [action, toolCallId] = cb.data.split(":");
+    const sep = cb.data.indexOf(":");
+    const action = sep === -1 ? cb.data : cb.data.slice(0, sep);
+    const toolCallId = sep === -1 ? "" : cb.data.slice(sep + 1);
 
-    if (action === "approve" && toolCallId) {
-      await db
-        .from("tool_calls")
-        .update({ status: "approved" })
-        .eq("id", toolCallId)
-        .eq("status", "pending_confirmation");
+    const { data: tgAccount } = await db
+      .from("telegram_accounts")
+      .select("user_id")
+      .eq("telegram_user_id", cb.from.id)
+      .single();
+
+    if (!toolCallId || !tgAccount?.user_id) {
+      await answerCallbackQuery(cb.id, "Sesión no válida");
+      return NextResponse.json({ ok: true });
+    }
+
+    const row = await getToolCallWithSessionUser(db, toolCallId);
+    if (!row || row.user_id !== tgAccount.user_id) {
+      await answerCallbackQuery(cb.id, "No autorizado");
+      return NextResponse.json({ ok: true });
+    }
+
+    if (action === "approve") {
+      const key = process.env.OAUTH_ENCRYPTION_KEY;
       await answerCallbackQuery(cb.id, "Aprobado");
-      await sendTelegramMessage(cb.message.chat.id, "Acción aprobada. Ejecutando...");
-    } else if (action === "reject" && toolCallId) {
-      await db
-        .from("tool_calls")
-        .update({ status: "rejected" })
-        .eq("id", toolCallId)
-        .eq("status", "pending_confirmation");
-      await answerCallbackQuery(cb.id, "Rechazado");
-      await sendTelegramMessage(cb.message.chat.id, "Acción cancelada.");
+      await sendTelegramMessage(cb.message.chat.id, "Ejecutando…");
+      const out = await approvePendingToolCall(
+        db,
+        toolCallId,
+        tgAccount.user_id as string,
+        key
+      );
+      if (out.ok) {
+        const r = out.result;
+        let line = "Listo.";
+        if (typeof r.issue_url === "string") line = `Issue: ${r.issue_url}`;
+        else if (typeof r.html_url === "string") line = `Repositorio: ${r.html_url}`;
+        else if (typeof r.message === "string") line = r.message;
+        else if (typeof r.note_id === "string") {
+          line = `Nota guardada (id: ${r.note_id}).`;
+        }
+        await sendTelegramMessage(cb.message.chat.id, line);
+      } else {
+        if (out.error === "OAUTH_ENCRYPTION_KEY is not configured") {
+          await sendTelegramMessage(
+            cb.message.chat.id,
+            "El servidor no tiene configurada la clave de cifrado (OAUTH_ENCRYPTION_KEY), necesaria para GitHub."
+          );
+        } else {
+          await sendTelegramMessage(
+            cb.message.chat.id,
+            `No se pudo completar: ${out.error}`
+          );
+        }
+      }
+    } else if (action === "reject") {
+      const ok = await rejectPendingToolCall(db, toolCallId, tgAccount.user_id as string);
+      await answerCallbackQuery(cb.id, ok ? "Rechazado" : "No aplicable");
+      await sendTelegramMessage(
+        cb.message.chat.id,
+        ok ? "Acción cancelada." : "No se pudo cancelar (estado inválido)."
+      );
     }
 
     return NextResponse.json({ ok: true });
@@ -224,6 +291,27 @@ export async function POST(request: Request) {
     .eq("user_id", userId)
     .eq("status", "active");
 
+  const encryptionKey = process.env.OAUTH_ENCRYPTION_KEY;
+  const githubRow = (integrations ?? []).find(
+    (i: Record<string, unknown>) => i.provider === "github"
+  );
+  let githubAccessToken: string | null = null;
+  if (
+    githubRow &&
+    encryptionKey &&
+    typeof githubRow.encrypted_tokens === "string" &&
+    githubRow.encrypted_tokens.length > 0
+  ) {
+    try {
+      githubAccessToken = decryptOAuthToken(
+        githubRow.encrypted_tokens as string,
+        encryptionKey
+      );
+    } catch {
+      githubAccessToken = null;
+    }
+  }
+
   try {
     const result = await runAgent({
       message: text,
@@ -246,27 +334,23 @@ export async function POST(request: Request) {
         status: i.status as "active" | "revoked" | "expired",
         created_at: i.created_at as string,
       })),
+      githubAccessToken,
     });
 
-    // Check if response contains a pending confirmation
-    let parsed: Record<string, unknown> | null = null;
-    try {
-      parsed = JSON.parse(result.response);
-    } catch {
-      // not JSON, regular text response
-    }
-
-    if (parsed?.pending_confirmation) {
-      await sendTelegramMessage(chatId, String(parsed.message ?? "Se requiere confirmación."), {
+    if (result.pendingConfirmation) {
+      const pc = result.pendingConfirmation;
+      await sendTelegramMessage(chatId, pc.message, {
         inline_keyboard: [
           [
-            { text: "Aprobar", callback_data: `approve:${parsed.tool_call_id}` },
-            { text: "Cancelar", callback_data: `reject:${parsed.tool_call_id}` },
+            { text: "Aprobar", callback_data: `approve:${pc.toolCallId}` },
+            { text: "Cancelar", callback_data: `reject:${pc.toolCallId}` },
           ],
         ],
       });
-    } else {
+    } else if (result.response) {
       await sendTelegramMessage(chatId, result.response);
+    } else {
+      await sendTelegramMessage(chatId, "(Sin respuesta de texto)");
     }
   } catch (error) {
     console.error("Telegram agent error:", error);
