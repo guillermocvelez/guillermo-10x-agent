@@ -74,6 +74,24 @@ export interface TelegramAccount {
   linked_at: string;
 }
 
+export interface ScheduledTask {
+  id: string;
+  user_id: string;
+  title: string;
+  task_prompt: string;
+  cron_expression: string;
+  timezone: string;
+  pre_notify_minutes: number;
+  status: "active" | "paused" | "cancelled";
+  next_run_at: string;
+  next_pre_notify_at: string;
+  pre_notify_sent: boolean;
+  last_run_at?: string | null;
+  last_pre_notify_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ToolDefinition {
   id: string;
   name: string;

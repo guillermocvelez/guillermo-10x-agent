@@ -26,6 +26,7 @@ export default async function ChatPage() {
     .single();
 
   let sessionMessages: Array<{
+    id: string;
     role: string;
     content: string;
     created_at: string;
@@ -34,10 +35,10 @@ export default async function ChatPage() {
   if (messages?.id) {
     const { data } = await supabase
       .from("agent_messages")
-      .select("role, content, created_at, structured_payload")
+      .select("id, role, content, created_at, structured_payload")
       .eq("session_id", messages.id)
       .order("created_at", { ascending: true })
-      .limit(50);
+      .limit(80);
     sessionMessages = data ?? [];
   }
 

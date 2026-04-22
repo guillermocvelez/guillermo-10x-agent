@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createServerClient, markPendingToolConfirmationResolvedInMessages } from "@agents/db";
 import {
   approvePendingToolCall,
   rejectPendingToolCall,
@@ -31,19 +32,24 @@ export async function POST(
       return NextResponse.json({ error: "Invalid action" }, { status: 400 });
     }
 
+    /** Service role: evita fallos RLS con `tool_calls` de sesiones `scheduled` u otras lecturas cruzadas. */
+    const db = createServerClient();
+
     if (action === "reject") {
-      const ok = await rejectPendingToolCall(supabase, id, user.id);
+      const ok = await rejectPendingToolCall(db, id, user.id);
       if (!ok) {
         return NextResponse.json({ error: "Not found or invalid state" }, { status: 400 });
       }
+      await markPendingToolConfirmationResolvedInMessages(db, id);
       return NextResponse.json({ ok: true });
     }
 
     const key = process.env.OAUTH_ENCRYPTION_KEY;
-    const out = await approvePendingToolCall(supabase, id, user.id, key);
+    const out = await approvePendingToolCall(db, id, user.id, key);
     if (!out.ok) {
       return NextResponse.json({ error: out.error }, { status: out.httpStatus });
     }
+    await markPendingToolConfirmationResolvedInMessages(db, id);
     return NextResponse.json({ ok: true, result: out.result });
   } catch (e) {
     console.error("tool-calls action:", e);

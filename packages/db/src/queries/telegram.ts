@@ -35,3 +35,17 @@ export async function getUserByTelegramId(
     .single();
   return data as TelegramAccount | null;
 }
+
+/** `chat_id` para enviar mensajes al usuario (bot de Telegram). */
+export async function getTelegramChatIdForUser(
+  db: DbClient,
+  userId: string
+): Promise<number | null> {
+  const { data } = await db
+    .from("telegram_accounts")
+    .select("chat_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (data == null || data.chat_id == null) return null;
+  return Number(data.chat_id);
+}

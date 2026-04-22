@@ -8,6 +8,11 @@ import {
 import {
   executeConfirmedGithubTool,
   executeConfirmedSaveSecureNote,
+  executeConfirmedBash,
+  executeConfirmedWorkspaceWrite,
+  executeConfirmedWorkspaceEdit,
+  executeConfirmedScheduleCronTask,
+  executeConfirmedSetScheduledTaskStatus,
 } from "@agents/agent";
 
 function errMsg(e: unknown): string {
@@ -76,6 +81,121 @@ async function approvePendingToolCallInner(
         await updateToolCallStatus(db, toolCallId, "failed", { error: msg });
       } catch {
         /* ignore secondary failure */
+      }
+      return { ok: false, error: msg, httpStatus: 500 };
+    }
+  }
+
+  if (name === "bash_executor") {
+    try {
+      await updateToolCallStatus(db, toolCallId, "approved");
+      const result = await executeConfirmedBash(
+        row.arguments_json as Record<string, unknown>
+      );
+      await updateToolCallStatus(db, toolCallId, "executed", result);
+      return { ok: true, result };
+    } catch (e) {
+      const msg = errMsg(e);
+      try {
+        await updateToolCallStatus(db, toolCallId, "failed", { error: msg });
+      } catch {
+        /* ignore */
+      }
+      return { ok: false, error: msg, httpStatus: 500 };
+    }
+  }
+
+  if (name === "workspace_write_file") {
+    try {
+      await updateToolCallStatus(db, toolCallId, "approved");
+      const result = await executeConfirmedWorkspaceWrite(
+        row.arguments_json as Record<string, unknown>
+      );
+      await updateToolCallStatus(db, toolCallId, "executed", result);
+      return { ok: true, result };
+    } catch (e) {
+      const msg = errMsg(e);
+      try {
+        await updateToolCallStatus(db, toolCallId, "failed", { error: msg });
+      } catch {
+        /* ignore */
+      }
+      return { ok: false, error: msg, httpStatus: 500 };
+    }
+  }
+
+  if (name === "workspace_edit_file") {
+    try {
+      await updateToolCallStatus(db, toolCallId, "approved");
+      const result = await executeConfirmedWorkspaceEdit(
+        row.arguments_json as Record<string, unknown>
+      );
+      await updateToolCallStatus(db, toolCallId, "executed", result);
+      return { ok: true, result };
+    } catch (e) {
+      const msg = errMsg(e);
+      try {
+        await updateToolCallStatus(db, toolCallId, "failed", { error: msg });
+      } catch {
+        /* ignore */
+      }
+      return { ok: false, error: msg, httpStatus: 500 };
+    }
+  }
+
+  if (name === "schedule_cron_task") {
+    try {
+      await updateToolCallStatus(db, toolCallId, "approved");
+      const result = await executeConfirmedScheduleCronTask(
+        db,
+        ownerUserId,
+        row.arguments_json as Record<string, unknown>
+      );
+      if (result.error) {
+        await updateToolCallStatus(db, toolCallId, "failed", result);
+        return {
+          ok: false,
+          error: String(result.message ?? result.error),
+          httpStatus: 400,
+        };
+      }
+      await updateToolCallStatus(db, toolCallId, "executed", result);
+      return { ok: true, result };
+    } catch (e) {
+      const msg = errMsg(e);
+      try {
+        await updateToolCallStatus(db, toolCallId, "failed", { error: msg });
+      } catch {
+        /* ignore */
+      }
+      return { ok: false, error: msg, httpStatus: 500 };
+    }
+  }
+
+  if (name === "set_scheduled_task_status") {
+    try {
+      await updateToolCallStatus(db, toolCallId, "approved");
+      const result = await executeConfirmedSetScheduledTaskStatus(
+        db,
+        ownerUserId,
+        row.arguments_json as Record<string, unknown>
+      );
+      if (result.error) {
+        await updateToolCallStatus(db, toolCallId, "failed", result);
+        return {
+          ok: false,
+          error: String(result.message ?? result.error),
+          httpStatus: 400,
+        };
+      }
+      await updateToolCallStatus(db, toolCallId, "executed", result);
+      return { ok: true, result };
+    } catch (e) {
+      const msg = errMsg(e);
+      try {
+        await updateToolCallStatus(db, toolCallId, "failed", { error: msg });
+      } catch {
+        /* ignore */
       }
       return { ok: false, error: msg, httpStatus: 500 };
     }

@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { createServerClient, decryptOAuthToken, getToolCallWithSessionUser } from "@agents/db";
+import {
+  createServerClient,
+  decryptOAuthToken,
+  getToolCallWithSessionUser,
+  markPendingToolConfirmationResolvedInMessages,
+} from "@agents/db";
 import { runAgent } from "@agents/agent";
 import {
   approvePendingToolCall,
@@ -132,11 +137,26 @@ export async function POST(request: Request) {
         let line = "Listo.";
         if (typeof r.issue_url === "string") line = `Issue: ${r.issue_url}`;
         else if (typeof r.html_url === "string") line = `Repositorio: ${r.html_url}`;
-        else if (typeof r.message === "string") line = r.message;
+        else if (typeof r.stdout === "string" || typeof r.stderr === "string") {
+          const parts: string[] = [];
+          if (typeof r.message === "string") parts.push(r.message);
+          if (typeof r.exit_code === "number") parts.push(`Salida: código ${r.exit_code}`);
+          if (typeof r.stdout === "string" && r.stdout.trim())
+            parts.push(r.stdout.trimEnd().slice(0, 3500));
+          if (typeof r.stderr === "string" && r.stderr.trim())
+            parts.push(`stderr: ${r.stderr.trimEnd().slice(0, 1500)}`);
+          line = parts.join("\n\n") || "Listo.";
+        }         else if (typeof r.path === "string" && typeof r.bytes_written === "number") {
+          line = `${typeof r.message === "string" ? r.message : "Hecho."} ${r.path} (${r.bytes_written} bytes)`;
+        } else if (typeof r.scheduled_task_id === "string") {
+          const st = typeof r.status === "string" ? ` Estado: ${r.status}.` : "";
+          line = `Tarea programada. Id: ${r.scheduled_task_id}.${st} Próxima: ${r.next_run_at ?? "—"}`;
+        } else if (typeof r.message === "string") line = r.message;
         else if (typeof r.note_id === "string") {
           line = `Nota guardada (id: ${r.note_id}).`;
         }
         await sendTelegramMessage(cb.message.chat.id, line);
+        await markPendingToolConfirmationResolvedInMessages(db, toolCallId);
       } else {
         if (out.error === "OAUTH_ENCRYPTION_KEY is not configured") {
           await sendTelegramMessage(
@@ -153,6 +173,9 @@ export async function POST(request: Request) {
     } else if (action === "reject") {
       const ok = await rejectPendingToolCall(db, toolCallId, tgAccount.user_id as string);
       await answerCallbackQuery(cb.id, ok ? "Rechazado" : "No aplicable");
+      if (ok) {
+        await markPendingToolConfirmationResolvedInMessages(db, toolCallId);
+      }
       await sendTelegramMessage(
         cb.message.chat.id,
         ok ? "Acción cancelada." : "No se pudo cancelar (estado inválido)."

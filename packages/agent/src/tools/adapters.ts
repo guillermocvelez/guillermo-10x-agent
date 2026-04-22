@@ -8,6 +8,7 @@ import {
   insertUserSecureNote,
   getLastUserMessageContent,
   listUserSecureNotes,
+  listScheduledTasksForUser,
 } from "@agents/db";
 import { userMessageAllowsListSecureNotes } from "./list-notes-gate";
 import {
@@ -16,6 +17,16 @@ import {
   githubCreateIssue,
   githubCreateRepo,
 } from "./github-api";
+import { parseAllowlistedCommand, runAllowlistedCommand } from "./bash-allowlist";
+import {
+  workspaceReadFileImpl,
+  workspaceWriteFileImpl,
+  workspaceEditFileImpl,
+} from "./file-tools-impl";
+import {
+  executeConfirmedScheduleCronTask,
+  executeConfirmedSetScheduledTaskStatus,
+} from "../scheduled-task-deferred";
 import type { AgentToolContext } from "./tool-context";
 import { readAgentIdsFromRunnableConfig } from "./runtime-config";
 
@@ -447,6 +458,381 @@ export function buildLangChainTools(ctx: AgentToolContext) {
               .optional()
               .default(false)
               .describe("true for private repository, false for public"),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("bash_executor", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const needsConfirm = toolRequiresConfirmation("bash_executor");
+          const record = await createToolCall(
+            ctx.db,
+            ctx.sessionId,
+            "bash_executor",
+            input as Record<string, unknown>,
+            needsConfirm
+          );
+          if (needsConfirm) {
+            const preview =
+              input.command.length > 200
+                ? `${input.command.slice(0, 197)}...`
+                : input.command;
+            return JSON.stringify({
+              pending_confirmation: true,
+              tool_call_id: record.id,
+              tool_name: "bash_executor",
+              message: `Confirma ejecutar este comando (solo subconjunto permitido: ls / curl https):\n${preview}`,
+            });
+          }
+          const parsed = parseAllowlistedCommand(input.command);
+          if (!parsed.ok) {
+            await updateToolCallStatus(ctx.db, record.id, "failed", {
+              error: parsed.error,
+            });
+            return JSON.stringify({
+              error: parsed.error,
+              message: "Comando no permitido.",
+            });
+          }
+          try {
+            const out = await runAllowlistedCommand(parsed.parsed);
+            const result = {
+              message:
+                out.exit_code === 0
+                  ? "Comando ejecutado."
+                  : "Comando terminó con error.",
+              stdout: out.stdout,
+              stderr: out.stderr,
+              exit_code: out.exit_code,
+            };
+            await updateToolCallStatus(ctx.db, record.id, "executed", result);
+            return JSON.stringify(result);
+          } catch (e) {
+            const err = e instanceof Error ? e.message : "exec failed";
+            await updateToolCallStatus(ctx.db, record.id, "failed", { error: err });
+            return JSON.stringify({ error: "exec_failed", message: err });
+          }
+        },
+        {
+          name: "bash_executor",
+          description:
+            "Runs a strictly allowlisted one-line command on the server (limited `ls` or HTTPS `curl` only). " +
+            "When the user says `ls`, `ls -la`, `curl https://...`, or `bash_executor <line>`, you MUST call this tool with that single line as `command` (for `bash_executor ls`, use command `ls`). " +
+            "Always requires user confirmation in the app after you call the tool—do not ask for confirmation in plain chat instead of calling the tool. No pipes, redirects, or arbitrary shell.",
+          schema: z.object({
+            command: z
+              .string()
+              .min(1)
+              .describe(
+                'Single allowlisted line only, e.g. "ls", "ls -la", "ls packages/agent", "curl -s https://example.com" — never include the word bash_executor in this field.'
+              ),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("workspace_read_file", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          try {
+            const result = await workspaceReadFileImpl(input.path, {
+              max_bytes: input.max_bytes,
+              offset_chars: input.offset_chars,
+            });
+            return JSON.stringify(result);
+          } catch (e) {
+            const err = e instanceof Error ? e.message : "read_failed";
+            return JSON.stringify({ error: "read_failed", message: err });
+          }
+        },
+        {
+          name: "workspace_read_file",
+          description:
+            "Read a UTF-8 text file inside the agent workspace using a **relative** path (e.g. README.md, packages/agent/src/graph.ts). " +
+            "Use this instead of bash for inspecting file contents. Returns content or structured errors (directory, not found, not utf8).",
+          schema: z.object({
+            path: z
+              .string()
+              .min(1)
+              .describe("Relative path from workspace root; must not escape with .."),
+            max_bytes: z
+              .number()
+              .int()
+              .positive()
+              .max(524288)
+              .optional()
+              .describe("Max bytes to read (default cap 512KB)"),
+            offset_chars: z
+              .number()
+              .int()
+              .nonnegative()
+              .optional()
+              .describe("Skip first N UTF-8 characters of the decoded slice"),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("workspace_write_file", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const needsConfirm = toolRequiresConfirmation("workspace_write_file");
+          const record = await createToolCall(
+            ctx.db,
+            ctx.sessionId,
+            "workspace_write_file",
+            input as Record<string, unknown>,
+            needsConfirm
+          );
+          if (needsConfirm) {
+            const preview =
+              input.content.length > 120
+                ? `${input.content.slice(0, 117)}...`
+                : input.content;
+            return JSON.stringify({
+              pending_confirmation: true,
+              tool_call_id: record.id,
+              tool_name: "workspace_write_file",
+              message: `Confirma escribir el archivo \`${input.path}\` en el workspace:\n${preview}`,
+            });
+          }
+          try {
+            const result = await workspaceWriteFileImpl(input.path, input.content);
+            await updateToolCallStatus(ctx.db, record.id, "executed", result);
+            return JSON.stringify(result);
+          } catch (e) {
+            const err = e instanceof Error ? e.message : "write_failed";
+            await updateToolCallStatus(ctx.db, record.id, "failed", { error: err });
+            return JSON.stringify({ error: "write_failed", message: err });
+          }
+        },
+        {
+          name: "workspace_write_file",
+          description:
+            "Create or overwrite a UTF-8 text file at a **relative** path in the workspace. " +
+            "Requires user confirmation in the UI. Prefer this over bash redirections for writing files.",
+          schema: z.object({
+            path: z.string().min(1).describe("Relative path under workspace root"),
+            content: z.string().describe("Full file body to write"),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("workspace_edit_file", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const needsConfirm = toolRequiresConfirmation("workspace_edit_file");
+          const record = await createToolCall(
+            ctx.db,
+            ctx.sessionId,
+            "workspace_edit_file",
+            input as Record<string, unknown>,
+            needsConfirm
+          );
+          if (needsConfirm) {
+            const oldPreview =
+              input.old_string.length > 80
+                ? `${input.old_string.slice(0, 77)}...`
+                : input.old_string;
+            return JSON.stringify({
+              pending_confirmation: true,
+              tool_call_id: record.id,
+              tool_name: "workspace_edit_file",
+              message: `Confirma editar \`${input.path}\` — reemplazo único de:\n${oldPreview}`,
+            });
+          }
+          try {
+            const result = await workspaceEditFileImpl(
+              input.path,
+              input.old_string,
+              input.new_string
+            );
+            await updateToolCallStatus(ctx.db, record.id, "executed", result);
+            return JSON.stringify(result);
+          } catch (e) {
+            const err = e instanceof Error ? e.message : "edit_failed";
+            await updateToolCallStatus(ctx.db, record.id, "failed", { error: err });
+            return JSON.stringify({ error: "edit_failed", message: err });
+          }
+        },
+        {
+          name: "workspace_edit_file",
+          description:
+            "Replace **exactly one** occurrence of old_string with new_string in a UTF-8 workspace file (relative path). " +
+            "Fails if old_string is missing or not unique. Requires confirmation. Safer than ad-hoc sed/bash.",
+          schema: z.object({
+            path: z.string().min(1).describe("Relative path under workspace root"),
+            old_string: z
+              .string()
+              .min(1)
+              .describe("Exact substring to replace; must occur exactly once"),
+            new_string: z.string().describe("Replacement text (may be empty to delete the match)"),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("schedule_cron_task", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const needsConfirm = toolRequiresConfirmation("schedule_cron_task");
+          const record = await createToolCall(
+            ctx.db,
+            ctx.sessionId,
+            "schedule_cron_task",
+            input as Record<string, unknown>,
+            needsConfirm
+          );
+          if (needsConfirm) {
+            const tp = input.task_prompt;
+            const preview = tp.length > 400 ? `${tp.slice(0, 397)}...` : tp;
+            const tz = input.timezone ?? "UTC";
+            const pre = input.pre_notify_minutes ?? 5;
+            return JSON.stringify({
+              pending_confirmation: true,
+              tool_call_id: record.id,
+              tool_name: "schedule_cron_task",
+              message:
+                `Confirma esta tarea programada:\n**${input.title}**\nCron: \`${input.cron_expression}\`\nZona: ${tz}\nRecordatorio: ${pre} min antes de cada ejecución.\n\nInstrucciones:\n${preview}`,
+            });
+          }
+          try {
+            const result = await executeConfirmedScheduleCronTask(
+              ctx.db,
+              ctx.userId,
+              input as Record<string, unknown>
+            );
+            if (result.error) {
+              await updateToolCallStatus(ctx.db, record.id, "failed", result);
+              return JSON.stringify(result);
+            }
+            await updateToolCallStatus(ctx.db, record.id, "executed", result);
+            return JSON.stringify(result);
+          } catch (e) {
+            const err = e instanceof Error ? e.message : "schedule_failed";
+            await updateToolCallStatus(ctx.db, record.id, "failed", { error: err });
+            return JSON.stringify({ error: "schedule_failed", message: err });
+          }
+        },
+        {
+          name: "schedule_cron_task",
+          description:
+            "Registers a recurring task: server runs the agent on cron and reminds `pre_notify_minutes` before each run (default 5). " +
+            "Call this tool as soon as the user wants scheduling (do not ask them to type 'confirm' in chat instead of calling you): the UI shows Approve/Cancel after you call. " +
+            "If the user replies 'confirm', 'yes', 'ok' after agreeing parameters in the prior message, call this tool now with those parameters.",
+          schema: z.object({
+            title: z.string().min(1).describe("Short task name"),
+            task_prompt: z
+              .string()
+              .min(1)
+              .describe("Instructions the agent receives on each scheduled run"),
+            cron_expression: z
+              .string()
+              .min(1)
+              .describe('Cron, e.g. "0 8 * * *" for daily 08:00 (5-field min hour dom month dow)'),
+            timezone: z.string().optional().describe("IANA timezone, default UTC"),
+            pre_notify_minutes: z
+              .number()
+              .int()
+              .min(1)
+              .max(120)
+              .optional()
+              .describe("Minutes before each run to send reminder (default 5)"),
+          }),
+        }
+      )
+    );
+
+    tools.push(
+      tool(
+        async () => {
+          const rows = await listScheduledTasksForUser(ctx.db, ctx.userId);
+          const summary = rows.map((r) => ({
+            id: r.id,
+            title: r.title,
+            status: r.status,
+            cron_expression: r.cron_expression,
+            timezone: r.timezone,
+            pre_notify_minutes: r.pre_notify_minutes,
+            next_run_at: r.next_run_at,
+            next_pre_notify_at: r.next_pre_notify_at,
+            task_prompt_preview:
+              r.task_prompt.length > 240 ? `${r.task_prompt.slice(0, 237)}…` : r.task_prompt,
+          }));
+          return JSON.stringify({ tasks: summary, count: summary.length });
+        },
+        {
+          name: "list_scheduled_tasks",
+          description:
+            "Lists this user's scheduled cron tasks (id, title, status, cron, next run). Read-only. " +
+            "Use before pausing/cancelling so you have the correct UUID for `set_scheduled_task_status`.",
+          schema: z.object({}),
+        }
+      )
+    );
+
+    tools.push(
+      tool(
+        async (input) => {
+          const needsConfirm = toolRequiresConfirmation("set_scheduled_task_status");
+          const record = await createToolCall(
+            ctx.db,
+            ctx.sessionId,
+            "set_scheduled_task_status",
+            input as Record<string, unknown>,
+            needsConfirm
+          );
+          if (needsConfirm) {
+            const st = String(input.status).toLowerCase();
+            return JSON.stringify({
+              pending_confirmation: true,
+              tool_call_id: record.id,
+              tool_name: "set_scheduled_task_status",
+              message: `Confirma el cambio de estado de la tarea programada:\n**Id:** \`${input.scheduled_task_id}\`\n**Nuevo estado:** \`${st}\` (${st === "paused" ? "pausar" : st === "cancelled" ? "cancelar" : "reactivar"})`,
+            });
+          }
+          try {
+            const result = await executeConfirmedSetScheduledTaskStatus(
+              ctx.db,
+              ctx.userId,
+              input as Record<string, unknown>
+            );
+            if (result.error) {
+              await updateToolCallStatus(ctx.db, record.id, "failed", result);
+              return JSON.stringify(result);
+            }
+            await updateToolCallStatus(ctx.db, record.id, "executed", result);
+            return JSON.stringify(result);
+          } catch (e) {
+            const err = e instanceof Error ? e.message : "set_status_failed";
+            await updateToolCallStatus(ctx.db, record.id, "failed", { error: err });
+            return JSON.stringify({ error: "set_status_failed", message: err });
+          }
+        },
+        {
+          name: "set_scheduled_task_status",
+          description:
+            "Sets a scheduled task's status: paused (stop until resumed), cancelled (stopped), or active (resume; next run is recomputed). " +
+            "Requires UI/Telegram confirmation. Use list_scheduled_tasks for ids.",
+          schema: z.object({
+            scheduled_task_id: z
+              .string()
+              .min(1)
+              .describe("Task row UUID from list_scheduled_tasks"),
+            status: z.enum(["active", "paused", "cancelled"]),
           }),
         }
       )

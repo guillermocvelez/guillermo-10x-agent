@@ -31,6 +31,43 @@ const AVAILABLE_TOOLS = [
     requiresIntegration: null,
   },
   {
+    id: "bash_executor",
+    name: "Ejecutor de comandos (demo)",
+    description:
+      "Lista archivos (ls) o peticiones HTTPS (curl) con subconjunto acotado; requiere confirmación explícita.",
+    risk: "high" as const,
+    requiresIntegration: null,
+  },
+  {
+    id: "workspace_read_file",
+    name: "Leer archivo (workspace)",
+    description: "Lee texto UTF-8 bajo el workspace; rutas relativas y límites de tamaño.",
+    risk: "low" as const,
+    requiresIntegration: null,
+  },
+  {
+    id: "workspace_write_file",
+    name: "Escribir archivo (workspace)",
+    description: "Crea o sobrescribe un archivo de texto; pide confirmación.",
+    risk: "medium" as const,
+    requiresIntegration: null,
+  },
+  {
+    id: "workspace_edit_file",
+    name: "Editar archivo (workspace)",
+    description: "Reemplazo único old→new en un archivo; pide confirmación.",
+    risk: "medium" as const,
+    requiresIntegration: null,
+  },
+  {
+    id: "schedule_cron_task",
+    name: "Tareas programadas (cron)",
+    description:
+      "Agenda tareas recurrentes en Supabase; recordatorio minutos antes y ejecución automática (HITL al crear).",
+    risk: "medium" as const,
+    requiresIntegration: null,
+  },
+  {
     id: "save_secure_note",
     name: "Guardar nota privada",
     description:

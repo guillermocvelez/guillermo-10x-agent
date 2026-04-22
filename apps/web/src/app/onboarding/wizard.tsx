@@ -7,6 +7,7 @@ import { StepProfile } from "./steps/step-profile";
 import { StepAgent } from "./steps/step-agent";
 import { StepTools } from "./steps/step-tools";
 import { StepReview } from "./steps/step-review";
+import { USER_TOGGLEABLE_TOOL_IDS } from "@/lib/tool-ids";
 
 interface Props {
   userId: string;
@@ -65,19 +66,7 @@ export function OnboardingWizard({ userId, initialProfile, initialToolSettings }
       updated_at: new Date().toISOString(),
     });
 
-    const TOOL_IDS = [
-      "get_user_preferences",
-      "list_enabled_tools",
-      "session_context",
-      "save_secure_note",
-      "list_secure_notes",
-      "github_list_repos",
-      "github_list_issues",
-      "github_create_issue",
-      "github_create_repo",
-    ];
-
-    for (const toolId of TOOL_IDS) {
+    for (const toolId of USER_TOGGLEABLE_TOOL_IDS) {
       await supabase.from("user_tool_settings").upsert(
         {
           user_id: userId,

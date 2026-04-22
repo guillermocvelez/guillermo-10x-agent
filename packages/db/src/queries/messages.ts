@@ -44,3 +44,30 @@ export async function getLastUserMessageContent(
   }
   return null;
 }
+
+/** Marca mensajes assistant con HITL ya resuelto (evita que el polling vuelva a mostrar Aprobar). */
+export async function markPendingToolConfirmationResolvedInMessages(
+  db: DbClient,
+  toolCallId: string
+): Promise<void> {
+  const { data: rows, error } = await db
+    .from("agent_messages")
+    .select("id, structured_payload")
+    .contains("structured_payload", { toolCallId });
+  if (error) {
+    console.error("[markPendingToolConfirmationResolvedInMessages]", error);
+    return;
+  }
+  for (const row of rows ?? []) {
+    const sp = row.structured_payload as Record<string, unknown> | null;
+    if (!sp || typeof sp !== "object") continue;
+    if (sp.toolCallId !== toolCallId) continue;
+    if (sp.resolved === true) continue;
+    const next = { ...sp, resolved: true };
+    const { error: upErr } = await db
+      .from("agent_messages")
+      .update({ structured_payload: next })
+      .eq("id", row.id as string);
+    if (upErr) console.error("[markPendingToolConfirmationResolvedInMessages] update", upErr);
+  }
+}

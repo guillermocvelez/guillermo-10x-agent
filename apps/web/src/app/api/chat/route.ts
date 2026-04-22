@@ -1,7 +1,22 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createServerClient, decryptOAuthToken } from "@agents/db";
+import {
+  createServerClient,
+  decryptOAuthToken,
+  addMessage,
+  getLatestPendingToolCallForSession,
+  markPendingToolConfirmationResolvedInMessages,
+} from "@agents/db";
 import { runAgent } from "@agents/agent";
+import {
+  approvePendingToolCall,
+  rejectPendingToolCall,
+} from "@/lib/pending-tool-actions";
+import { formatToolResult } from "@/lib/format-tool-result";
+import {
+  matchesPendingApproval,
+  matchesPendingReject,
+} from "@/lib/chat-pending-shortcut";
 
 export async function POST(request: Request) {
   try {
@@ -87,6 +102,54 @@ export async function POST(request: Request) {
     if (!session) {
       return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
     }
+
+    const pending = await getLatestPendingToolCallForSession(
+      db,
+      session.id,
+      user.id
+    );
+    if (pending) {
+      if (matchesPendingApproval(message)) {
+        await addMessage(db, session.id, "user", message);
+        const out = await approvePendingToolCall(
+          db,
+          pending.id,
+          user.id,
+          encryptionKey
+        );
+        const responseText = out.ok
+          ? formatToolResult(out.result)
+          : `No se pudo completar la acción: ${out.error}`;
+        if (out.ok) {
+          await markPendingToolConfirmationResolvedInMessages(db, pending.id);
+        }
+        await addMessage(db, session.id, "assistant", responseText);
+        return NextResponse.json({
+          response: responseText,
+          pendingConfirmation: null,
+          toolCalls: [pending.tool_name],
+        });
+      }
+      if (matchesPendingReject(message)) {
+        await addMessage(db, session.id, "user", message);
+        const ok = await rejectPendingToolCall(db, pending.id, user.id);
+        if (ok) {
+          await markPendingToolConfirmationResolvedInMessages(db, pending.id);
+        }
+        const responseText = ok
+          ? "Acción cancelada."
+          : "No había una acción pendiente válida para cancelar.";
+        await addMessage(db, session.id, "assistant", responseText);
+        return NextResponse.json({
+          response: responseText,
+          pendingConfirmation: null,
+          toolCalls: [],
+        });
+      }
+    }
+    // Sin fila `pending_confirmation`: no interceptar "confirmo"/"cancelo" aquí.
+    // Si el modelo pidió confirmación solo en texto (p. ej. cron) sin invocar la tool,
+    // el usuario puede escribir "confirmo" y `runAgent` debe invocar la herramienta para mostrar Aprobar/Cancelar.
 
     const result = await runAgent({
       message,

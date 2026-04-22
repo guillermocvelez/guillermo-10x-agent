@@ -1,14 +1,20 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { formatToolResult } from "@/lib/format-tool-result";
 
 interface StructuredPayload {
   kind?: string;
   toolCallId?: string;
   toolName?: string;
+  phase?: string;
+  scheduled_task_id?: string;
+  /** Persistido en BD tras Aprobar/Cancelar para que el polling no reactive el HITL. */
+  resolved?: boolean;
 }
 
 export interface ChatMessage {
+  id?: string;
   role: string;
   content: string;
   created_at?: string;
@@ -21,32 +27,59 @@ interface Props {
   initialMessages: ChatMessage[];
 }
 
-function formatToolResult(result: Record<string, unknown>): string {
-  if (typeof result.issue_url === "string") {
-    return `Listo. Issue: ${result.issue_url}`;
-  }
-  if (typeof result.html_url === "string") {
-    return `Listo. Repositorio: ${result.html_url}`;
-  }
-  if (typeof result.note_id === "string" && typeof result.message === "string") {
-    return `${result.message} (id: ${result.note_id})`;
-  }
-  if (typeof result.message === "string") {
-    return result.message;
-  }
-  return JSON.stringify(result, null, 2);
-}
-
 export function ChatInterface({ agentName, initialMessages }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  /** Sincroniza con BD (ej. mensajes insertados por el cron de tareas programadas). */
+  useEffect(() => {
+    async function pull() {
+      if (loadingRef.current) return;
+      try {
+        const res = await fetch("/api/chat/messages", { credentials: "same-origin" });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          messages?: Array<{
+            id: string;
+            role: string;
+            content: string;
+            created_at: string;
+            structured_payload?: StructuredPayload | null;
+          }>;
+        };
+        const rows = data.messages;
+        if (!Array.isArray(rows) || rows.length === 0) return;
+        setMessages((prev) => {
+          const prevWithoutId = prev.filter((m) => !m.id);
+          if (prevWithoutId.length > 0 && rows.length >= prev.length) {
+            return (rows as ChatMessage[]).map((srv) => {
+              const old = prev.find((p) => p.id === srv.id);
+              if (old?.pendingResolved) return { ...srv, pendingResolved: true };
+              return { ...srv };
+            });
+          }
+          const prevIds = new Set(prev.map((m) => m.id).filter(Boolean));
+          const additions = rows.filter((m) => m.id && !prevIds.has(m.id));
+          if (additions.length === 0) return prev;
+          return [...prev, ...additions];
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    void pull();
+    const id = setInterval(() => void pull(), 18000);
+    return () => clearInterval(id);
+  }, []);
 
   async function runToolAction(toolCallId: string, action: "approve" | "reject") {
     setActionLoadingId(toolCallId);
@@ -58,15 +91,27 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
       });
       const data = await res.json().catch(() => ({}));
 
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.structured_payload?.toolCallId === toolCallId
-            ? { ...m, pendingResolved: true }
-            : m
-        )
-      );
-
       if (action === "reject") {
+        if (!res.ok) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content:
+                typeof data.error === "string"
+                  ? `No se pudo cancelar: ${data.error}`
+                  : "No se pudo cancelar la acción.",
+            },
+          ]);
+          return;
+        }
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.structured_payload?.toolCallId === toolCallId
+              ? { ...m, pendingResolved: true }
+              : m
+          )
+        );
         setMessages((prev) => [
           ...prev,
           { role: "assistant", content: "Acción cancelada." },
@@ -87,6 +132,14 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
         ]);
         return;
       }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.structured_payload?.toolCallId === toolCallId
+            ? { ...m, pendingResolved: true }
+            : m
+        )
+      );
 
       if (data.result && typeof data.result === "object") {
         setMessages((prev) => [
@@ -182,18 +235,24 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
               msg.role === "assistant" &&
               msg.structured_payload?.kind === "pending_tool_confirmation" &&
               msg.structured_payload.toolCallId &&
-              !msg.pendingResolved;
+              !msg.pendingResolved &&
+              !msg.structured_payload?.resolved;
+            const isScheduledRun =
+              msg.role === "assistant" &&
+              msg.structured_payload?.kind === "scheduled_task_run";
 
             return (
               <div
-                key={`${i}-${msg.created_at ?? ""}-${msg.content.slice(0, 20)}`}
+                key={msg.id ?? `${i}-${msg.created_at ?? ""}-${msg.content.slice(0, 20)}`}
                 className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 <div
                   className={`max-w-[80%] rounded-lg px-4 py-2.5 text-sm leading-relaxed ${
                     msg.role === "user"
                       ? "bg-blue-600 text-white"
-                      : "bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
+                      : isScheduledRun
+                        ? "border-l-4 border-amber-500 bg-neutral-100 text-neutral-900 dark:bg-neutral-800/90 dark:text-neutral-100"
+                        : "bg-neutral-100 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
                   }`}
                 >
                   <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -221,6 +280,12 @@ export function ChatInterface({ agentName, initialMessages }: Props) {
                       >
                         Cancelar
                       </button>
+                      <p className="w-full text-xs text-neutral-500 mt-1">
+                        También puedes enviar solo{" "}
+                        <span className="font-mono">confirmo</span>,{" "}
+                        <span className="font-mono">sí</span> o{" "}
+                        <span className="font-mono">no</span> como mensaje.
+                      </p>
                     </div>
                   )}
                 </div>

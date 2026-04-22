@@ -24,6 +24,124 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     parameters_schema: { type: "object", properties: {}, required: [] },
   },
   {
+    id: "bash_executor",
+    name: "bash_executor",
+    description:
+      "Ejecuta en el servidor un subconjunto acotado de comandos (solo `ls` con flags -l/-a y ruta relativa segura, o `curl` HTTPS GET). Alto riesgo: siempre requiere confirmación en la app o Telegram antes de ejecutar. No uses para shell libre, pipes ni redirecciones.",
+    risk: "high",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          description:
+            'Una sola línea. Ejemplos permitidos: "ls", "ls -la", "ls -la src"; "curl -s https://example.com".',
+        },
+      },
+      required: ["command"],
+    },
+  },
+  {
+    id: "workspace_read_file",
+    name: "workspace_read_file",
+    description:
+      "Lee un archivo de texto UTF-8 dentro del workspace del agente (ruta relativa). Límite de tamaño por defecto; usa offset/max_bytes para fragmentos. Preferible a bash para inspeccionar código o docs.",
+    risk: "low",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Ruta relativa al workspace, p. ej. README.md o packages/agent/src/graph.ts" },
+        max_bytes: { type: "number", description: "Techo de lectura en bytes (opcional, máx. 524288)" },
+        offset_chars: { type: "number", description: "Recorte inicial en caracteres UTF-8 (opcional)" },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    id: "workspace_write_file",
+    name: "workspace_write_file",
+    description:
+      "Crea o sobrescribe un archivo de texto en el workspace (ruta relativa). Riesgo medio: requiere confirmación en la app antes de escribir. No uses bash con redirecciones para esto.",
+    risk: "medium",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Ruta relativa al workspace" },
+        content: { type: "string", description: "Contenido completo UTF-8 del archivo" },
+      },
+      required: ["path", "content"],
+    },
+  },
+  {
+    id: "workspace_edit_file",
+    name: "workspace_edit_file",
+    description:
+      "Reemplaza exactamente una ocurrencia de old_string por new_string en un archivo UTF-8 del workspace. Riesgo medio: requiere confirmación. old_string debe aparecer una sola vez o la operación falla.",
+    risk: "medium",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Ruta relativa al workspace" },
+        old_string: { type: "string", description: "Fragmento exacto a buscar (una sola coincidencia)" },
+        new_string: { type: "string", description: "Texto de reemplazo" },
+      },
+      required: ["path", "old_string", "new_string"],
+    },
+  },
+  {
+    id: "schedule_cron_task",
+    name: "schedule_cron_task",
+    description:
+      "Registra una tarea periódica: el servidor invoca al agente según el cron y envía recordatorio antes de cada ejecución. Debes invocar esta herramienta (no pedir solo «confirma en el chat»): la interfaz muestra Aprobar/Cancelar tras la invocación. Expresiones cron 5 o 6 campos.",
+    risk: "medium",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Nombre corto de la tarea" },
+        task_prompt: {
+          type: "string",
+          description: "Instrucciones que recibirá el agente en cada ejecución (qué hacer / qué resumir)",
+        },
+        cron_expression: {
+          type: "string",
+          description: 'Ej. "0 8 * * *" (cada día 8:00) o seis campos con segundos según cron-parser',
+        },
+        timezone: { type: "string", description: "IANA, p. ej. Europe/Madrid; por defecto UTC" },
+        pre_notify_minutes: {
+          type: "number",
+          description: "Minutos antes de cada ejecución para el recordatorio (1–120, default 5)",
+        },
+      },
+      required: ["title", "task_prompt", "cron_expression"],
+    },
+  },
+  {
+    id: "list_scheduled_tasks",
+    name: "list_scheduled_tasks",
+    description:
+      "Lista las tareas programadas (cron) del usuario autenticado: id, título, estado, expresión cron y próxima ejecución. Sin efectos secundarios. Disponible cuando el usuario tiene habilitada la familia de tareas programadas.",
+    risk: "low",
+    parameters_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    id: "set_scheduled_task_status",
+    name: "set_scheduled_task_status",
+    description:
+      "Cambia el estado de una tarea programada del usuario: paused (detener temporalmente), cancelled (dar por cerrada) o active (reanudar; recalcula próxima ejecución). Requiere confirmación en la app/Telegram.",
+    risk: "medium",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        scheduled_task_id: { type: "string", description: "UUID de la fila en scheduled_tasks" },
+        status: {
+          type: "string",
+          description: "active | paused | cancelled",
+        },
+      },
+      required: ["scheduled_task_id", "status"],
+    },
+  },
+  {
     id: "save_secure_note",
     name: "save_secure_note",
     description:

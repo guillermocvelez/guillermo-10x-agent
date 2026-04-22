@@ -42,6 +42,11 @@ npm install
 3. Copia **todo** el contenido y pégalo en el editor.
 4. Ejecuta el script (**Run**).
 
+5. Repite con las migraciones posteriores (en orden), si existen en tu copia del repo:
+
+   - `packages/db/supabase/migrations/00002_user_notes.sql`
+   - `packages/db/supabase/migrations/00003_scheduled_tasks.sql` (tareas `cron` + canal `scheduled` en sesiones)
+
 Si algo falla (por ejemplo, el trigger `on_auth_user_created` en un proyecto ya modificado), revisa el mensaje de error; en la mayoría de proyectos nuevos el script aplica de una vez.
 
 ---
@@ -136,7 +141,7 @@ Telegram **exige HTTPS** para webhooks. En local:
 
 4. Con la app en marcha, visita en el navegador (sustituye la URL base):
 
-   `https://0cf6-2803-9810-6890-b608-2f28-7730-328-4b9d.ngrok-free.app/api/telegram/setup`
+   `https://2eed-2803-9810-6890-b608-4849-4c37-e3d8-d667.ngrok-free.app/api/telegram/setup`
 
    Eso llama a `setWebhook` de Telegram apuntando a `/api/telegram/webhook` y, si definiste secreto, lo asocia al webhook.
 
@@ -144,6 +149,23 @@ Telegram **exige HTTPS** para webhooks. En local:
 6. En Telegram, envía al bot: `/link TU_CODIGO` (el código que te muestra la web).
 
 Después de vincular, los mensajes al bot usan el mismo pipeline que el chat web.
+
+---
+
+## Tareas programadas (cron + recordatorio)
+
+1. Habilita la herramienta **`schedule_cron_task`** en Ajustes (riesgo medio: la creación pide **Aprobar** en web/Telegram).
+2. Define en `.env.local` de **`apps/web`** una clave secreta, por ejemplo:
+
+   `CRON_SECRET=tu_secreto_largo_aleatorio`
+
+3. Programa un invocador **cada minuto** (Vercel Cron, `pg_cron` + `net.http_post`, GitHub Actions, etc.) contra:
+
+   `POST https://TU_DOMINIO/api/cron/scheduled-tasks`
+
+   Cabeceras: `Authorization: Bearer TU_CRON_SECRET` **o** `x-cron-secret: TU_CRON_SECRET`.
+
+4. El agente recibe un **recordatorio** unos minutos antes (por defecto **5**, configurable con `pre_notify_minutes`) y la **ejecución** en la hora del cron. Los resultados se envían por **Telegram** si la cuenta está vinculada.
 
 ---
 

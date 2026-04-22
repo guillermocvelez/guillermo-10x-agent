@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
+import { USER_TOGGLEABLE_TOOL_IDS, USER_TOOL_LABEL } from "@/lib/tool-ids";
 
 interface Props {
   userId: string;
@@ -12,18 +13,6 @@ interface Props {
   githubConnected: boolean;
   githubQuery?: { connected?: boolean; error?: string };
 }
-
-const TOOL_IDS = [
-  "get_user_preferences",
-  "list_enabled_tools",
-  "session_context",
-  "save_secure_note",
-  "list_secure_notes",
-  "github_list_repos",
-  "github_list_issues",
-  "github_create_issue",
-  "github_create_repo",
-];
 
 export function SettingsForm({
   userId,
@@ -69,7 +58,7 @@ export function SettingsForm({
       updated_at: new Date().toISOString(),
     }).eq("id", userId);
 
-    for (const toolId of TOOL_IDS) {
+    for (const toolId of USER_TOGGLEABLE_TOOL_IDS) {
       await supabase.from("user_tool_settings").upsert(
         {
           user_id: userId,
@@ -210,7 +199,7 @@ export function SettingsForm({
       <section className="space-y-4">
         <h2 className="text-base font-semibold">Herramientas</h2>
         <div className="space-y-2">
-          {TOOL_IDS.map((id) => (
+          {USER_TOGGLEABLE_TOOL_IDS.map((id) => (
             <label key={id} className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -218,7 +207,7 @@ export function SettingsForm({
                 onChange={() => toggleTool(id)}
                 className="rounded border-neutral-300"
               />
-              {id}
+              {USER_TOOL_LABEL[id] ?? id}
             </label>
           ))}
         </div>
